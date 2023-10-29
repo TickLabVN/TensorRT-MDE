@@ -5,9 +5,26 @@ import numpy as np
 import torch.backends.cudnn as cudnn
 import PIL.Image as pil
 from torchvision import transforms
+import argparse
 
 
-def save_depth(depth, name):
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Simple testing funtion for Monodepthv2 models.')
+
+    parser.add_argument('--image_dir', type=str,
+                        help='path to folder images, for inference mode')
+    parser.add_argument('--output_dir', type=str,
+                        help='path to save images, for inference mode')
+    parser.add_argument('--load_weights_path', type=str,
+                        help='Path contain tensorrt ckpts', required=True)
+    parser.add_argument('--benchmark',
+                        help='Benchmark mode', 
+                        action="store_true")
+
+    return parser.parse_args()
+
+def save_depth(depth, name, out_dir):
     depth = depth.reshape((1, 1, 256, 512))
     depth = 1 / (depth + 1e-9)
     scaled_depth = (depth - np.min(depth)) / (np.max(depth) - np.min(depth))
@@ -16,7 +33,7 @@ def save_depth(depth, name):
     scaled_depth = np.transpose(scaled_depth, (1, 2, 0))
     scaled_depth = np.clip(scaled_depth * 255, 0, 255).astype(np.uint8)
     scaled_depth = pil.fromarray(scaled_depth)
-    scaled_depth.save("/workspace/source/output/tensorrt_fp32/{:010d}.jpg".format(name))
+    scaled_depth.save(os.path.join(out_dir, "{:010d}.jpg".format(name)))
     
 def load_input(image_path):
     input_image = pil.open(image_path).convert('RGB')
@@ -53,22 +70,20 @@ def benchmark(model, use_cuda = True, input_shape=(1024, 3, 512, 512), dtype='fp
     print("Input shape:", input_data.size())
     print('Average throughput: %.2f images/second'%(input_shape[0]/np.mean(timings)))
 
-ts_path = "/workspace/source/ckpts/resnet101_jit_cuda.pt"
-tensorrt_path = "/workspace/source/ckptsv2/resnet18_infp32_modelfp32.ts"
-
-trt_model = torch.jit.load(tensorrt_path)
-# benchmark(trt_model, use_cuda = True, input_shape=(4, 3, 256, 512), nruns=100, dtype="fp32")
-
-with open("/workspace/source/filenames/day_val_451.txt", "r") as file:
-    img_names = file.readlines()
-img_names = [int(img_name) for img_name in img_names]
+if __name__ == "__main__":
+    args = parse_args()    
+    tensorrt_path = args.load_weights_path
+    trt_model = torch.jit.load(tensorrt_path)
     
-# preds = []
-print(">> Inference")
-for name in img_names:
-    print("{:010d}".format(name))
-    input = load_input("/workspace/source/data/rgb/{:010d}.png".format(name))
-    # input = input.half()
-    output = trt_model(input.cuda())
-    output = output.detach().cpu().numpy()
-    save_depth(output, name)
+    if args.benchmark:
+        benchmark(trt_model, use_cuda = True, input_shape=(1, 3, 256, 512), nruns=100, dtype="fp32")
+    else:
+        with open("splits/day_val_451.txt", "r") as file:
+            img_names = file.readlines()
+        img_names = [int(img_name) for img_name in img_names]
+            
+        for name in img_names:
+            input = load_input(os.path.join(args.image_dir, "{:010d}.png".format(name)))
+            output = trt_model(input.cuda())
+            output = output.detach().cpu().numpy()
+            save_depth(output, name)
